@@ -15,7 +15,23 @@ export const SocketProvider = ({ children }) => {
   const [socket, setSocket] = useState(null)
 
   useEffect(() => {
-    const newSocket = io('http://localhost:5000')
+    // Use environment variable for production, fallback to localhost for development
+    const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:5000'
+    
+    console.log('Connecting to server:', SERVER_URL)
+    
+    const newSocket = io(SERVER_URL, {
+      transports: ['websocket', 'polling'],  // Try WebSocket first, fallback to polling
+    })
+
+    newSocket.on('connect', () => {
+      console.log('Socket connected:', newSocket.id)
+    })
+
+    newSocket.on('connect_error', (err) => {
+      console.error('Socket connection error:', err.message)
+    })
+
     setSocket(newSocket)
 
     return () => {

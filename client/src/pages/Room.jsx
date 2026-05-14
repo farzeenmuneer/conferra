@@ -3,6 +3,7 @@ import { useParams, useLocation, useNavigate } from 'react-router-dom'
 import Peer from 'simple-peer'
 import { useSocket } from '../context/SocketContext'
 import ChatPanel from '../components/ChatPanel'
+import MeetingSummary from '../components/MeetingSummary'
 
 function Room() {
   const { roomId } = useParams()
@@ -21,10 +22,20 @@ function Room() {
   const [myVideoEnabled, setMyVideoEnabled] = useState(true)
   const [myAudioEnabled, setMyAudioEnabled] = useState(true)
   const [chatOpen, setChatOpen] = useState(false)
+  const [isScreenSharing, setIsScreenSharing] = useState(false)
+  const [showSummary, setShowSummary] = useState(false)
+  const [chatMessages, setChatMessages] = useState([])
   
   const myVideoRef = useRef(null)
   const peersRef = useRef({})
+  const screenTrackRef = useRef(null)
+  const hasJoinedRef = useRef(false)
   const socket = useSocket()
+
+  // Handle new chat messages for AI summary
+  const handleNewMessage = useCallback((data) => {
+    setChatMessages(prev => [...prev, data])
+  }, [])
 
   // Get user media (camera + mic)
   useEffect(() => {
@@ -116,15 +127,23 @@ function Room() {
   useEffect(() => {
     if (!socket || !stream) return
     
-    socket.emit('join-room', roomId, userName)
+    // Prevent duplicate join-room (React StrictMode fix)
+    if (!hasJoinedRef.current) {
+      socket.emit('join-room', roomId, userName)
+      hasJoinedRef.current = true
+    }
     
     socket.on('user-connected', (user) => {
-      createPeer(user.id, user.name, true)
+      if (stream && !peersRef.current[user.id]) {
+        createPeer(user.id, user.name, true)
+      }
     })
     
     socket.on('existing-users', (users) => {
       users.forEach(user => {
-        createPeer(user.id, user.name, false)
+        if (stream && !peersRef.current[user.id]) {
+          createPeer(user.id, user.name, false)
+        }
       })
     })
     
@@ -165,6 +184,60 @@ function Room() {
     }
   }, [socket, stream, roomId, userName, createPeer])
 
+  // Screen Share
+  const toggleScreenShare = useCallback(async () => {
+    if (isScreenSharing) {
+      if (screenTrackRef.current) {
+        screenTrackRef.current.stop()
+        screenTrackRef.current = null
+      }
+      if (stream && myVideoRef.current) {
+        const videoTrack = stream.getVideoTracks()[0]
+        if (videoTrack) {
+          videoTrack.enabled = true
+          Object.values(peersRef.current).forEach(peer => {
+            try {
+              const senders = peer.getSenders?.() || []
+              const videoSender = senders.find(s => s.track?.kind === 'video')
+              if (videoSender) videoSender.replaceTrack(videoTrack)
+            } catch (e) {}
+          })
+        }
+        myVideoRef.current.srcObject = stream
+      }
+      setIsScreenSharing(false)
+    } else {
+      try {
+        const screenStream = await navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: false
+        })
+        const screenTrack = screenStream.getVideoTracks()[0]
+        screenTrackRef.current = screenTrack
+        
+        Object.values(peersRef.current).forEach(peer => {
+          try {
+            const senders = peer.getSenders?.() || []
+            const videoSender = senders.find(s => s.track?.kind === 'video')
+            if (videoSender) videoSender.replaceTrack(screenTrack)
+          } catch (e) {}
+        })
+        
+        if (myVideoRef.current) {
+          myVideoRef.current.srcObject = screenStream
+        }
+        
+        screenTrack.onended = () => {
+          toggleScreenShare()
+        }
+        
+        setIsScreenSharing(true)
+      } catch (err) {
+        console.error('Screen share failed:', err)
+      }
+    }
+  }, [isScreenSharing, stream])
+
   // Controls
   const toggleAudio = useCallback(() => {
     if (stream) {
@@ -188,6 +261,9 @@ function Room() {
     if (stream) {
       stream.getTracks().forEach(track => track.stop())
     }
+    if (screenTrackRef.current) {
+      screenTrackRef.current.stop()
+    }
     Object.values(peersRef.current).forEach(peer => peer.destroy())
     if (socket) socket.disconnect()
     navigate('/')
@@ -203,6 +279,12 @@ function Room() {
         </div>
         <div className="flex items-center gap-4">
           <span className="text-sm text-gray-300">{userName} (You)</span>
+          <button
+            onClick={() => setShowSummary(true)}
+            className="px-3 py-1 bg-purple-600 hover:bg-purple-700 text-white text-xs rounded-full transition-colors"
+          >
+            🤖 AI Summary
+          </button>
           <span className="px-2 py-1 bg-green-900 text-green-300 text-xs rounded-full">Connected</span>
         </div>
       </div>
@@ -220,9 +302,9 @@ function Room() {
                 <div className="relative bg-gray-800 rounded-xl overflow-hidden aspect-video">
                   <video ref={myVideoRef} autoPlay muted playsInline className="w-full h-full object-cover" />
                   <div className="absolute bottom-2 left-2 bg-black/60 px-2 py-1 rounded text-sm text-white">
-                    {userName} (You)
+                    {userName} (You) {isScreenSharing && '(Screen)'}
                   </div>
-                  {!myVideoEnabled && (
+                  {!myVideoEnabled && !isScreenSharing && (
                     <div className="absolute inset-0 bg-gray-900 flex items-center justify-center">
                       <span className="text-gray-400 text-lg">Camera Off</span>
                     </div>
@@ -269,6 +351,10 @@ function Room() {
                 className={`p-4 rounded-full transition-colors ${myVideoEnabled ? 'bg-gray-700 hover:bg-gray-600 text-white' : 'bg-red-600 hover:bg-red-700 text-white'}`}>
                 {myVideoEnabled ? '📹' : '📷'}
               </button>
+              <button onClick={toggleScreenShare}
+                className={`p-4 rounded-full transition-colors ${isScreenSharing ? 'bg-green-600 hover:bg-green-700 text-white' : 'bg-gray-700 hover:bg-gray-600 text-white'}`}>
+                {isScreenSharing ? '💻' : '🖥️'}
+              </button>
               <button onClick={() => setChatOpen(!chatOpen)}
                 className={`p-4 rounded-full transition-colors ${chatOpen ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'bg-gray-700 hover:bg-gray-600 text-white'}`}>
                 💬
@@ -287,8 +373,17 @@ function Room() {
           userName={userName}
           isOpen={chatOpen}
           onToggle={() => setChatOpen(false)}
+          onNewMessage={handleNewMessage}
         />
       </div>
+
+      {/* AI Summary Modal */}
+      {showSummary && (
+        <MeetingSummary 
+          messages={chatMessages}
+          onClose={() => setShowSummary(false)}
+        />
+      )}
     </div>
   )
 }
