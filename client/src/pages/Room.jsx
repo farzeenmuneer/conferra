@@ -26,7 +26,7 @@ function Room() {
   const peersRef = useRef({})
   const socket = useSocket()
 
-  // Get user media
+  // Get user media (camera + mic)
   useEffect(() => {
     const getMedia = async () => {
       try {
