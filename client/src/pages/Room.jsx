@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { useParams, useLocation, useNavigate } from 'react-router-dom'
 import Peer from 'simple-peer'
 import { useSocket } from '../context/SocketContext'
+import ChatPanel from '../components/ChatPanel'
 
 function Room() {
   const { roomId } = useParams()
@@ -9,7 +10,6 @@ function Room() {
   const navigate = useNavigate()
   const { userName, isHost } = location.state || {}
   
-  // Redirect if no name
   useEffect(() => {
     if (!userName) {
       navigate('/', { replace: true })
@@ -20,12 +20,13 @@ function Room() {
   const [stream, setStream] = useState(null)
   const [myVideoEnabled, setMyVideoEnabled] = useState(true)
   const [myAudioEnabled, setMyAudioEnabled] = useState(true)
+  const [chatOpen, setChatOpen] = useState(false)
   
   const myVideoRef = useRef(null)
   const peersRef = useRef({})
   const socket = useSocket()
 
-  // Get user media (camera + mic)
+  // Get user media
   useEffect(() => {
     const getMedia = async () => {
       try {
@@ -206,70 +207,87 @@ function Room() {
         </div>
       </div>
       
-      {/* Video Grid */}
-      <div className="flex-1 p-4 overflow-y-auto">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 auto-rows-max">
-          
-          {/* My Video */}
-          {stream && (
-            <div className="relative bg-gray-800 rounded-xl overflow-hidden aspect-video">
-              <video ref={myVideoRef} autoPlay muted playsInline className="w-full h-full object-cover" />
-              <div className="absolute bottom-2 left-2 bg-black/60 px-2 py-1 rounded text-sm text-white">
-                {userName} (You)
-              </div>
-              {!myVideoEnabled && (
-                <div className="absolute inset-0 bg-gray-900 flex items-center justify-center">
-                  <span className="text-gray-400 text-lg">Camera Off</span>
+      {/* Main Content Area */}
+      <div className="flex-1 flex overflow-hidden">
+        
+        {/* Video Section */}
+        <div className="flex-1 flex flex-col min-w-0">
+          <div className="flex-1 p-4 overflow-y-auto">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 auto-rows-max">
+              
+              {/* My Video */}
+              {stream && (
+                <div className="relative bg-gray-800 rounded-xl overflow-hidden aspect-video">
+                  <video ref={myVideoRef} autoPlay muted playsInline className="w-full h-full object-cover" />
+                  <div className="absolute bottom-2 left-2 bg-black/60 px-2 py-1 rounded text-sm text-white">
+                    {userName} (You)
+                  </div>
+                  {!myVideoEnabled && (
+                    <div className="absolute inset-0 bg-gray-900 flex items-center justify-center">
+                      <span className="text-gray-400 text-lg">Camera Off</span>
+                    </div>
+                  )}
+                </div>
+              )}
+              
+              {/* Remote Videos */}
+              {Object.values(peers).map(peer => (
+                <div key={peer.peerId} className="relative bg-gray-800 rounded-xl overflow-hidden aspect-video">
+                  <video autoPlay playsInline className="w-full h-full object-cover"
+                    ref={el => { if (el && peer.stream) el.srcObject = peer.stream }} />
+                  <div className="absolute bottom-2 left-2 bg-black/60 px-2 py-1 rounded text-sm text-white">
+                    {peer.userName}
+                  </div>
+                </div>
+              ))}
+              
+              {/* Empty State */}
+              {Object.keys(peers).length === 0 && (
+                <div className="col-span-full flex items-center justify-center h-64">
+                  <div className="text-center">
+                    <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-gray-700 flex items-center justify-center">
+                      <span className="text-2xl">👤</span>
+                    </div>
+                    <p className="text-gray-400 text-lg">Waiting for others to join...</p>
+                    <p className="text-gray-500 text-sm mt-1">
+                      Share this room code: <span className="text-blue-400 font-mono">{roomId}</span>
+                    </p>
+                  </div>
                 </div>
               )}
             </div>
-          )}
+          </div>
           
-          {/* Remote Videos */}
-          {Object.values(peers).map(peer => (
-            <div key={peer.peerId} className="relative bg-gray-800 rounded-xl overflow-hidden aspect-video">
-              <video autoPlay playsInline className="w-full h-full object-cover"
-                ref={el => { if (el && peer.stream) el.srcObject = peer.stream }} />
-              <div className="absolute bottom-2 left-2 bg-black/60 px-2 py-1 rounded text-sm text-white">
-                {peer.userName}
-              </div>
+          {/* Bottom Controls */}
+          <div className="bg-gray-800 px-6 py-4 border-t border-gray-700">
+            <div className="flex items-center justify-center gap-4">
+              <button onClick={toggleAudio}
+                className={`p-4 rounded-full transition-colors ${myAudioEnabled ? 'bg-gray-700 hover:bg-gray-600 text-white' : 'bg-red-600 hover:bg-red-700 text-white'}`}>
+                {myAudioEnabled ? '🎤' : '🔇'}
+              </button>
+              <button onClick={toggleVideo}
+                className={`p-4 rounded-full transition-colors ${myVideoEnabled ? 'bg-gray-700 hover:bg-gray-600 text-white' : 'bg-red-600 hover:bg-red-700 text-white'}`}>
+                {myVideoEnabled ? '📹' : '📷'}
+              </button>
+              <button onClick={() => setChatOpen(!chatOpen)}
+                className={`p-4 rounded-full transition-colors ${chatOpen ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'bg-gray-700 hover:bg-gray-600 text-white'}`}>
+                💬
+              </button>
+              <button onClick={leaveRoom}
+                className="p-4 rounded-full bg-red-600 hover:bg-red-700 text-white transition-colors">
+                📞
+              </button>
             </div>
-          ))}
-          
-          {/* Empty State */}
-          {Object.keys(peers).length === 0 && (
-            <div className="col-span-full flex items-center justify-center h-64">
-              <div className="text-center">
-                <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-gray-700 flex items-center justify-center">
-                  <span className="text-2xl">👤</span>
-                </div>
-                <p className="text-gray-400 text-lg">Waiting for others to join...</p>
-                <p className="text-gray-500 text-sm mt-1">
-                  Share this room code: <span className="text-blue-400 font-mono">{roomId}</span>
-                </p>
-              </div>
-            </div>
-          )}
-          
+          </div>
         </div>
-      </div>
-      
-      {/* Bottom Controls */}
-      <div className="bg-gray-800 px-6 py-4 border-t border-gray-700">
-        <div className="flex items-center justify-center gap-4">
-          <button onClick={toggleAudio}
-            className={`p-4 rounded-full transition-colors ${myAudioEnabled ? 'bg-gray-700 hover:bg-gray-600 text-white' : 'bg-red-600 hover:bg-red-700 text-white'}`}>
-            {myAudioEnabled ? '🎤' : '🔇'}
-          </button>
-          <button onClick={toggleVideo}
-            className={`p-4 rounded-full transition-colors ${myVideoEnabled ? 'bg-gray-700 hover:bg-gray-600 text-white' : 'bg-red-600 hover:bg-red-700 text-white'}`}>
-            {myVideoEnabled ? '📹' : '📷'}
-          </button>
-          <button onClick={leaveRoom}
-            className="p-4 rounded-full bg-red-600 hover:bg-red-700 text-white transition-colors">
-            📞
-          </button>
-        </div>
+        
+        {/* Chat Panel */}
+        <ChatPanel 
+          roomId={roomId}
+          userName={userName}
+          isOpen={chatOpen}
+          onToggle={() => setChatOpen(false)}
+        />
       </div>
     </div>
   )
