@@ -3,6 +3,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
+require('dotenv').config();
 
 const app = express();
 app.use(cors());
@@ -11,7 +12,7 @@ app.use(express.json());
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "http://localhost:5173", // Vite default
+    origin: process.env.CLIENT_URL || "http://localhost:5173",
     methods: ["GET", "POST"]
   }
 });
@@ -25,6 +26,7 @@ app.post('/api/rooms', (req, res) => {
   rooms.set(roomId, {
     id: roomId,
     participants: [],
+    messages: [],  // Store chat messages for AI summary
     createdAt: new Date()
   });
   res.json({ roomId });
@@ -34,7 +36,11 @@ app.post('/api/rooms', (req, res) => {
 app.get('/api/rooms/:roomId', (req, res) => {
   const room = rooms.get(req.params.roomId);
   if (room) {
-    res.json({ exists: true, participants: room.participants.length });
+    res.json({ 
+      exists: true, 
+      participants: room.participants.length,
+      messages: room.messages.length 
+    });
   } else {
     res.status(404).json({ exists: false });
   }
@@ -42,7 +48,8 @@ app.get('/api/rooms/:roomId', (req, res) => {
 
 // Socket.io Signaling
 io.on('connection', (socket) => {
-  
+  console.log(`User connected: ${socket.id}`);
+
   // User joins a room
   socket.on('join-room', (roomId, userName) => {
     // Create room if doesn't exist
@@ -50,6 +57,7 @@ io.on('connection', (socket) => {
       rooms.set(roomId, {
         id: roomId,
         participants: [],
+        messages: [],
         createdAt: new Date()
       });
     }
@@ -66,6 +74,9 @@ io.on('connection', (socket) => {
     
     socket.join(roomId);
     
+    // Store room ID on socket for disconnect handling
+    socket.roomId = roomId;
+    
     // Notify existing users about new peer
     socket.to(roomId).emit('user-connected', user);
     
@@ -73,7 +84,10 @@ io.on('connection', (socket) => {
     const otherUsers = room.participants.filter(p => p.id !== socket.id);
     socket.emit('existing-users', otherUsers);
     
-    console.log(`${user.name} joined room ${roomId}`);
+    // Send existing chat messages to new user
+    socket.emit('chat-history', room.messages);
+    
+    console.log(`${user.name} joined room ${roomId} (${room.participants.length} participants)`);
   });
 
   // WebRTC Signaling: Offer
@@ -93,40 +107,68 @@ io.on('connection', (socket) => {
 
   // Chat message
   socket.on('send-message', (roomId, message) => {
-    const user = getUserInRoom(roomId, socket.id);
-    socket.to(roomId).emit('receive-message', {
+    const room = rooms.get(roomId);
+    const user = room?.participants.find(p => p.id === socket.id);
+    
+    const messageData = {
       user: user?.name || 'Unknown',
       text: message,
       timestamp: new Date()
-    });
+    };
+    
+    // Store message in room history
+    if (room) {
+      room.messages.push(messageData);
+      
+      // Keep only last 200 messages
+      if (room.messages.length > 200) {
+        room.messages = room.messages.slice(-200);
+      }
+    }
+    
+    // Broadcast to everyone in the room INCLUDING sender
+    io.to(roomId).emit('receive-message', messageData);
+    
+    console.log(`Message in ${roomId} from ${messageData.user}: ${message.substring(0, 30)}...`);
   });
 
   // Disconnect
-  socket.on('disconnect', () => {
-    // Remove user from all rooms
+    socket.on('disconnect', () => {
+    console.log(`User disconnected: ${socket.id}`);
+    
     rooms.forEach((room, roomId) => {
-      const index = room.participants.findIndex(p => p.id === socket.id);
-      if (index !== -1) {
-        const user = room.participants[index];
-        room.participants.splice(index, 1);
-        socket.to(roomId).emit('user-disconnected', user);
-        
-        // Delete empty rooms
-        if (room.participants.length === 0) {
-          rooms.delete(roomId);
-        }
+      const before = room.participants.length;
+      
+      // Remove ALL entries for this socket (handles duplicates)
+      room.participants = room.participants.filter(p => p.id !== socket.id);
+      
+      const after = room.participants.length;
+      
+      if (before !== after) {
+        console.log(`Room ${roomId}: ${before} → ${after} participants`);
+        socket.to(roomId).emit('user-disconnected', { id: socket.id });
+      }
+      
+      // Clean up empty rooms
+      if (room.participants.length === 0) {
+        rooms.delete(roomId);
+        console.log(`Room ${roomId} deleted (empty)`);
       }
     });
   });
 });
 
-// Helper function
-function getUserInRoom(roomId, socketId) {
-  const room = rooms.get(roomId);
-  return room?.participants.find(p => p.id === socketId);
-}
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    rooms: rooms.size,
+    timestamp: new Date()
+  });
+});
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`Conferra server running on port ${PORT}`);
+  console.log(`Health check: http://localhost:${PORT}/health`);
 });
