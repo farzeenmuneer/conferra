@@ -21,8 +21,9 @@ function Home() {
     setError('')
     
     try {
-      const response = await fetch('http://localhost:5000/api/rooms', {
-        method: 'POST',
+        const API_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:5000'
+        const response = await fetch(`${API_URL}/api/rooms`, {
+            method: 'POST',
       })
       
       if (!response.ok) {
@@ -59,7 +60,7 @@ function Home() {
     
     try {
       // First check if room exists
-      const response = await fetch(`http://localhost:5000/api/rooms/${roomIdInput.trim()}`)
+      const response = await fetch(`${API_URL}/api/rooms/${roomIdInput.trim()}`)
       const data = await response.json()
       
       if (!data.exists) {
